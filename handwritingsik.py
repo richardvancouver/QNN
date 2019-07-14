@@ -877,6 +877,160 @@ class neuralnewtork(BaseEstimator):
 
         return np.mean(tmp)#np.mean(self.predict(X) == y)
 
+    def learning_curve(self, X, y,
+                    Xval=None, 
+                    yval=None,
+                    thetas1=None,
+                    gamma=None,
+                    pct=0.6,
+                    plot=False, maxiter=100,epsilon=0.1,gtol=0.1):
+        """
+        returns the training and cross validation set errors
+        for a learning curve
+        (good for exploring effect of number of training samples)
+        
+        Args:
+        X : training data
+        y : training value
+        Xval : test data
+        yval : test value
+        gamma : default None uses the objects value,
+                otherwise gamma=0.
+        pct (0<pct<1) : split the data as "pct" training, 1-pct testing
+                        only if Xval = None
+                        default pct = 0.6
+        plot : False/[True] optionally plot the learning curve
+        
+        Note: if Xval == None, then we assume (X,y) is the entire set of data,
+                and we split them up using split_data(data,target)
+
+        returns three vectors of length(ntrials):
+        error_train : training error for the N=length(pct*X) 
+        error_val : error on x-val data, when trainined on "i" samples
+        ntrials
+
+        error = cost_Function(lambda=0)
+
+        notes:
+        * a high error indicates lots of bias,
+            that you are probably underfitting the problem
+            (so add more neurons/layers, or lower regularization)
+            
+        * for lots of trials, a high gap between training_error
+            and test_error (x-val error) indicates lots of variance
+            (you are over-fitting, so remove some neurons/layers,
+            or increase the regularization parameter)
+
+        """
+        if Xval == None:
+            X, y, Xval, yval = split_datab(X, y, pct=pct)
+
+        X=list(X)
+        Xval=list(Xval)
+
+        if gamma == None:
+            gamma = self.gamma
+
+        m = len(X)#X.shape[0]
+    #need at least one training item...
+        stepsize = max(m/25,1)
+        ntrials = list(range(1,m,int(stepsize) ) )
+        mm = len(ntrials)
+        t_error = np.zeros(mm)
+        v_error = np.zeros(mm)
+        if not thetas1: #if no thetas1 provided, using the default thetas saved in the current instance 
+            thetas1 = self.flatten_thetas()
+
+        for i, v in enumerate(ntrials):
+            #fit with regularization
+            #self.fit(X[0:v+1], y[0:v+1], gamma=gamma, maxiter=50, raninit=True)
+            xopt = fmin_cg(f=self.costfunction,x0=thetas1,fprime=self.gradient,args=(X[0:v+1],y[0:v+1],self.nlayers,gamma), maxiter=maxiter,epsilon=epsilon,gtol=gtol,disp=0)
+            self.unflatten_thetas(xopt)#unflatten xopt and write the unflattened xopt into the layers
+            # but compute error without regularization
+            t_error[i] = self.costfunction(xopt,X[0:v+1], y[0:v+1],nll=self.nlayers,gamma=gamma)#flatthetas,indata1,iny1,4
+            # use entire x-val set
+            v_error[i] = self.costfunction(xopt,Xval, yval,nll=self.nlayers,gamma=gamma)
+            
+        if plot:
+            plt.plot(ntrials, t_error, 'r+', label='training')
+            plt.plot(ntrials, v_error, 'bx', label='x-val')
+            plt.xlabel('training set size')
+            plt.ylabel('error [J(gamma=0)]')
+            plt.legend()
+            plt.show()
+
+        return t_error, v_error, ntrials
+
+
+
+    def validation_curve(self, X, y,Xval=None, yval=None,thetas1=None,gammas=None,pct=0.6,plot=False,maxiter=100,epsilon=0.1,gtol=0.1):
+        """
+        use a cross-validation set to evaluate various regularization 
+        parameters (gamma)
+        
+        specifically:
+        train the NN, then loop over a range of regularization parameters
+        and select best 'gamma' (=min(costFunction(cross-val data))
+
+        Args:
+        X : training data
+        y : training value
+        Xval : test data
+        yval : test value
+        pct (0<pct<1) : if Xval=None, split into 'pct' training
+                        "1-pct" testing
+        gammas : a *list* of regularization values to sample
+                default None uses
+                [0., 0.0001, 0.0005, 0.001, 0.05, 0.1, .5, 1, 1.5, 15]
+        plot : False/[True] optionally plot the validation cure
+        
+        Note: if Xval == None, then we assume (X,y) is the entire set of data,
+                and we split them up using split_data(data,target)
+                Again, we train with regularization, but the erorr
+                is calculated without
+
+        returns:
+        train_error(gamma), cross_val_error(gamma), gamma, best_gamma
+
+        """
+        if Xval == None:
+            X, y, Xval, yval = split_datab(X, y, pct)
+
+        
+        X=list(X)
+        Xval=list(Xval)
+        
+        
+        if gammas == None:
+            gammas = [0., 0.0001, 0.0005, 0.001, 0.05, 0.1, .5, 1., 1.5, 15.]
+        
+        train_error = np.zeros(len(gammas))
+        xval_error = np.zeros(len(gammas))
+
+        if not thetas1:
+            thetas1 = self.flatten_thetas()
+
+
+        for gi, gv in enumerate(gammas):
+    #train with reg.
+            #self.fit(X, y, gamma=gv, maxiter=40, raninit=True)
+            xopt = fmin_cg(f=self.costfunction,x0=thetas1,fprime=self.gradient,args=(X,y,self.nlayers, gv), maxiter=maxiter,epsilon=epsilon,gtol=gtol,disp=0)
+            #self.fitb(indata1,iny1,thetas=None,gamma=None,maxiter=100,epsilon=0.1,gtol=0.1, fit_all=True, verbose=False)
+            self.unflatten_thetas(xopt)#unflatten xopt and write the unflattened xopt into the layers
+
+    #evaluate error without reg. 
+            train_error[gi] = self.costfunction(xopt,X, y,nll=self.nlayers,gamma=0.)
+            xval_error[gi] = self.costfunction(xopt,Xval, yval,nll=self.nlayers,gamma=0.)
+
+        if 1:
+            plt.plot(gammas, train_error, label='Train')
+            plt.plot(gammas, xval_error, label='Cross Validation')
+            plt.xlabel('gamma')
+            plt.ylabel('Error [costFunction]')
+            plt.legend()
+            plt.show()
+
+        return train_error, xval_error, gammas, gammas[xval_error.argmin()]
 
 
 
@@ -1282,6 +1436,23 @@ if __name__ =='__main__':#test unit
 
     testnn1.fitb(indata1,iny1,thetas=None,gamma=None,maxiter=100,epsilon=0.1,gtol=0.1, fit_all=True, verbose=False)
     print("fitb done")
+
+
+    print("starting learning curve:")
+    indatab=list(data2.data)
+    iny1b=data2.y
+    testnn1.learning_curve(indatab, iny1b,
+                    Xval=None, 
+                    yval=None,
+                    thetas1=None,
+                    gamma=None,
+                    pct=0.001,
+                    plot=False, maxiter=100,epsilon=0.1,gtol=0.1) #indatab, iny1b, pct=0.001, switch=1
+
+    testnn1.validation_curve(indatab, iny1b, Xval=None, yval=None,thetas1=None,gammas=[0., 0.0001],pct=0.001,plot=True,maxiter=100,epsilon=0.1,gtol=0.1)
+
+
+    
     #prediction propogationfwd
     # xopt_unflat=testnn1.unflatten_thetas(xopt)#actually .unflatten_thetas doesn't return the unflattened thetas matrix, only updating/overwriting the previous thetas matrix
     # print("xopt_unflat:",xopt_unflat)
